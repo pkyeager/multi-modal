@@ -10,3 +10,6 @@
 * Should use Pytorch instead of HuggingFace 
 * Specialise in one library instead of using multiple, less is better
 * Specify dependencies versions rather than installing the newest one, especially when working with the Jetson
+
+
+* Having problem of no CUDA found
