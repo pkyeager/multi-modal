@@ -1,123 +1,197 @@
-import os
-import requests
-import json
+# This script is currently not working as expected.
+
+
+
+import os 
 from datetime import datetime
 from dotenv import load_dotenv
+from sentinelhub import (
+    SHConfig,
+    CRS,
+    BBox,
+    DataCollection,
+    MimeType,
+    SentinelHubRequest,
+    SentinelHubCatalog,
+    SentinelHubDownloadClient
+)
+from shapely.geometry import mapping
 
 # Load environment variables
-load_dotenv()
+load_dotenv('.env.local')
 
-def get_oauth_token():
-    """Get OAuth token for authentication"""
-    client_id = os.getenv('SENTINEL_CLIENT_ID')
-    client_secret = os.getenv('SENTINEL_CLIENT_SECRET')
+def setup_config():
+    # Get environment variables
+    client_id = os.getenv('SH_CLIENT_ID')
+    client_secret = os.getenv('SH_CLIENT_SECRET')
     
+    # Validate credentials
     if not client_id or not client_secret:
-        raise ValueError("Missing SENTINEL_CLIENT_ID or SENTINEL_CLIENT_SECRET in .env file")
+        raise ValueError(
+            "Missing credentials. Please ensure SH_CLIENT_ID and SH_CLIENT_SECRET "
+            "are set in your .env.local file"
+        )
     
-    token_url = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
+    # Configure Sentinel Hub
+    config = SHConfig()
+    config.sh_client_id = client_id
+    config.sh_client_secret = client_secret
+    config.sh_token_url = "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
+    config.sh_base_url = "https://sh.dataspace.copernicus.eu"
     
-    response = requests.post(token_url,
-        data={
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-        }
-    )
+    if not config.sh_client_id or not config.sh_client_secret:
+        raise ValueError(
+            "Configuration error. Please check your credentials in .env.local file"
+        )
     
-    if response.status_code == 200:
-        return response.json()["access_token"]
-    else:
-        raise Exception(f"Failed to get token: {response.text}")
+    return config
 
-def download_sentinel_images(start_date="2023-09-01", end_date="2023-11-30"):
-    """Download Sentinel-1 GRD images for specified period"""
-    print(f"Downloading Sentinel-1 images from {start_date} to {end_date}")
+def get_sentinel_images(location, start_date, end_date, output_folder):
+    # Setup and validate configuration
+    try:
+        config = setup_config()
+    except ValueError as e:
+        print(f"Configuration error: {str(e)}")
+        return
     
-    token = get_oauth_token()
-    
-    # Sonderborg bounding box coordinates (from old utils)
-    geometry = {
-        "type": "Polygon",
-        "coordinates": [[
-            [9.577693, 54.829313],
-            [10.013713, 54.829313],
-            [10.013713, 54.967015],
-            [9.577693, 54.967015],
-            [9.577693, 54.829313]
-        ]]
-    }
-    
-    process_url = "https://sh.dataspace.copernicus.eu/api/v1/process"
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
-    # Using the SAR evalscript from old utils with modifications
-    evalscript = """
-    //VERSION=3
-    function setup() {
-        return {
-            input: [{
-                bands: ["VV", "VH"]
-            }],
-            output: {
-                bands: 3
-            }
-        };
-    }
-
-    function evaluatePixel(sample) {
-        return [sample.VV, sample.VH, (sample.VV + sample.VH) / 2];
-    }
-    """
-
-    process_body = {
-        "input": {
-            "bounds": {
-                "geometry": geometry,
-                "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/4326"}
-            },
-            "data": [{
-                "type": "sentinel-1-grd",
-                "dataFilter": {
-                    "timeRange": {
-                        "from": f"{start_date}T00:00:00Z",
-                        "to": f"{end_date}T23:59:59Z"
-                    },
-                    "orbitDirection": "ASCENDING"
-                }
-            }]
-        },
-        "output": {
-            "width": 1024,
-            "height": 1024,
-            "responses": [{
-                "identifier": "default",
-                "format": {"type": "image/tiff"}
-            }]
-        },
-        "evalscript": evalscript
-    }
-
     # Create output directory
-    output_dir = "data/sonderborg/sentinel-1/raw"
-    os.makedirs(output_dir, exist_ok=True)
-
-    response = requests.post(process_url, headers=headers, json=process_body)
+    os.makedirs(output_folder, exist_ok=True)
     
-    if response.status_code == 200:
-        # Save the image with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = os.path.join(output_dir, f"sentinel1_grd_{timestamp}.tiff")
+    sonderborg_bbox = BBox((9.577693, 54.829313, 10.013713, 54.967015), crs=CRS.WGS84)
+    
+    try:
+        catalog = SentinelHubCatalog(config=config)
         
-        with open(output_path, 'wb') as f:
-            f.write(response.content)
-        print(f"Image saved to: {output_path}")
-    else:
-        print(f"Failed to process request: {response.status_code} - {response.text}")
+        # Define the search parameters using CQL2
+        cql2_filter = {
+            "op": "and",
+            "args": [
+                {
+                    "op": "s_intersects",
+                    "args": [
+                        {
+                            "property": "geometry"
+                        },
+                        {
+                            "type": "Polygon",
+                            "coordinates": [[
+                                [9.577693, 54.829313],
+                                [9.577693, 54.967015],
+                                [10.013713, 54.967015],
+                                [10.013713, 54.829313],
+                                [9.577693, 54.829313]
+                            ]]
+                        }
+                    ]
+                },
+                {
+                    "op": "t_intersects",
+                    "args": [
+                        {
+                            "property": "datetime"
+                        },
+                        {
+                            "interval": [
+                                start_date,
+                                end_date
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        # Search for Sentinel-1 images
+        search_iterator = catalog.search(
+            collection=DataCollection.SENTINEL1,
+            filter=cql2_filter,
+            fields={"include": ["id", "properties.datetime"], "exclude": []},
+            filter_lang="cql2-json"
+        )
+        
+        results = list(search_iterator)
+        print(f"Total number of Sentinel-1 results:", len(results))
+        
+        if len(results) == 0:
+            print("No images found. Please check your search parameters and date range.")
+            return
+        
+        # Define the evalscript for Sentinel-1
+        evalscript_sar = """
+            //VERSION=3
+            function setup() {
+                return {
+                    input: ["VH", "dataMask"],
+                    output: [
+                        { id: "default", bands: 4 },
+                        { id: "eobrowserStats", bands: 1 },
+                        { id: "dataMask", bands: 1 },
+                    ],
+                };
+            }
+
+            function evaluatePixel(samples) {
+                const value = Math.max(0, Math.log(samples.VH) * 0.21714724095 + 1);
+                return {
+                    default: [value, value, value, samples.dataMask],
+                    eobrowserStats: [Math.max(-30, (10 * Math.log10(samples.VH)))],
+                    dataMask: [samples.dataMask],
+                };
+            }
+        """
+        
+        # Download all images
+        for result in results:
+            try:
+                # Set up the request for each image
+                request = SentinelHubRequest(
+                    evalscript=evalscript_sar,
+                    input_data=[
+                        SentinelHubRequest.input_data(
+                            data_collection=DataCollection.SENTINEL1,
+                            time_interval=(result.properties['datetime'], result.properties['datetime']),
+                        )
+                    ],
+                    responses=[
+                        SentinelHubRequest.output_response("default", MimeType.TIFF),
+                        SentinelHubRequest.output_response("eobrowserStats", MimeType.TIFF),
+                        SentinelHubRequest.output_response("dataMask", MimeType.TIFF)
+                    ],
+                    bbox=sonderborg_bbox,
+                    config=config,
+                )
+                
+                # Get the data
+                data = request.get_data()
+                
+                # Process timestamp
+                timestamp = result.properties['datetime'].replace(':', '-')
+                
+                # Save all three image types
+                for idx, (name, band_data) in enumerate(zip(['default', 'stats', 'mask'], data)):
+                    filename = f"S1_{name}_{timestamp}.tiff"
+                    filepath = os.path.join(output_folder, filename)
+                    with open(filepath, 'wb') as f:
+                        f.write(band_data)
+                    print(f"Saved {name} image to {filepath}")
+                
+            except Exception as e:
+                print(f"Error processing image {result.properties['datetime']}: {str(e)}")
+                continue
+            
+    except Exception as e:
+        print(f"Error during processing: {str(e)}")
+        return
 
 if __name__ == "__main__":
-    download_sentinel_images()
+    # Ensure the .env.local file exists
+    if not os.path.exists('.env.local'):
+        print("Error: .env.local file not found. Please create it with your credentials.")
+        exit(1)
+        
+    location = "Sonderborg, Denmark"
+    start_date = "2023-10-01"
+    end_date = "2023-10-31"
+    
+    # Fetch Sentinel-1 images
+    get_sentinel_images(location, start_date, end_date, "fetched_data/sentinel1")
