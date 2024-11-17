@@ -1,0 +1,6 @@
+sentinelsat
+pandas
+python-dotenv
+requests
+requests-oauthlib
+oauthlib

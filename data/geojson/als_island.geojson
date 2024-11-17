@@ -1,0 +1,24 @@
+{
+    "type": "FeatureCollection",
+    "features": [
+        {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [9.8016, 54.9333],
+                        [9.8020, 54.9335],
+                        [9.8030, 54.9340],
+                        [9.8040, 54.9330],
+                        [9.8016, 54.9333]  
+                    ]
+                ]
+            },
+            "properties": {
+                "name": "Als Island",
+                "description": "This is our first AOI"
+            }
+        }
+    ]
+}
