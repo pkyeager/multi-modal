@@ -22,7 +22,6 @@ import cv2
 from transformers import SamModel, SamProcessor
 from PIL import Image
 from tqdm import tqdm  
-import matplotlib.pyplot as plt  
 
 # Load pre-trained model and checkpoint
 device = "cpu"  # Use CPU for inference, tried mps but it was buggy with float64
@@ -60,7 +59,7 @@ def process_tile(tile_path):
     tile_path (str): The file path of the image tile.
 
     Returns:
-    tuple: A tuple containing the original tile image, raw predicted mask, and binary mask.
+    tuple: A tuple containing the binary mask only (removed original tile and raw mask from return).
     """
     tile_image = Image.open(tile_path).convert("RGB")
     prompt = [0, 0, 256, 256]  # Define the prompt as the full image box
@@ -78,11 +77,9 @@ def process_tile(tile_path):
     pred_masks = outputs.pred_masks
     pred_mask = torch.sigmoid(pred_masks)  # Apply sigmoid to get probabilities
     binary_mask = (pred_mask > 0.5).cpu().numpy()  # Convert to binary mask
-    
-    pred_mask = pred_mask.squeeze().cpu().numpy()  # Remove singleton dimensions
     binary_mask = binary_mask.squeeze()  # Remove singleton dimensions
     
-    return tile_image, pred_mask, binary_mask
+    return binary_mask
 
 def save_prediction(prediction, output_path):
     """
@@ -98,37 +95,6 @@ def save_prediction(prediction, output_path):
     prediction_image = Image.fromarray((prediction * 255).astype(np.uint8))  # Convert to uint8
     prediction_image.save(output_path)  # Save the image
 
-def plot_predictions(tile_image, raw_mask, binary_mask):
-    """
-    Plot the original image, raw predicted mask, and binary mask.
-
-    Parameters:
-    tile_image (PIL.Image): The original image tile.
-    raw_mask (numpy.ndarray): The raw predicted mask.
-    binary_mask (numpy.ndarray): The binary mask.
-    """
-    plt.figure(figsize=(15, 5))
-    print(f"Raw mask shape: {raw_mask.shape}")
-    print(f"Binary mask shape: {binary_mask.shape}")
-    
-    plt.subplot(1, 3, 1)
-    plt.title("Original Image")
-    plt.imshow(np.array(tile_image))
-    plt.axis('off')
-    
-    plt.subplot(1, 3, 2)
-    plt.title("Raw Predicted Mask")
-    plt.imshow(raw_mask, cmap='gray', vmin=0, vmax=1)
-    plt.axis('off')
-    
-    plt.subplot(1, 3, 3)
-    plt.title("Binary Mask")
-    plt.imshow(binary_mask, cmap='gray')
-    plt.axis('off')
-    
-    plt.tight_layout()
-    plt.show()
-
 def run_inference_on_tiles(tiles_dir, predictions_base_dir):
     """
     Run inference on all image tiles in the specified directory.
@@ -143,11 +109,7 @@ def run_inference_on_tiles(tiles_dir, predictions_base_dir):
                 tile_path = os.path.join(root, file)
                 
                 # Process the tile to get predictions
-                tile_image, raw_mask, binary_mask = process_tile(tile_path)
-                
-                # Plot predictions for the first image only
-                if file == files[0]:  # Check if it's the first file
-                    plot_predictions(tile_image, raw_mask, binary_mask)
+                binary_mask = process_tile(tile_path)
                 
                 # Create predictions directory based on the date
                 date_str = os.path.basename(root)
