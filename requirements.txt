@@ -5,8 +5,10 @@ transformers
 opencv-python
 Pillow
 numpy
-dotenv
+python-dotenv
 tqdm
 matplotlib
 sentinelhub
 shapely
+scikit-image
+pandas

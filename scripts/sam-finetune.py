@@ -1,5 +1,5 @@
 '''
-Use sarsam as inspiration to fine-tune our model for the Sentinel-1 dataset.
+Used MedSam as inspiration to fine-tune our model for the Sentinel-1 dataset.
 '''
 
 ### Setup the environment ###
@@ -128,7 +128,9 @@ for step, (image, gt, bboxes, names_temp) in enumerate(train_loader):
 
 ### Setup the Model for the training ###
 run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-model_save_path = join("../checkpoints", run_id + MODEL_NAME+ ".pth")
+model_save_dir = join("../checkpoints", run_id + MODEL_NAME)
+os.makedirs(model_save_dir, exist_ok=True)
+model_save_path = join(model_save_dir, "model.pth")
 
 class SARSam(nn.Module):
     def __init__(self,
@@ -149,7 +151,7 @@ class SARSam(nn.Module):
         image_embedding = self.image_encoder(image)  # (B, 256, 64, 64)
         # do not compute gradients for prompt encoder
         with torch.no_grad():
-            box_torch = torch.as_tensor(box, dtype=torch.float32, DEVICE=image.DEVICE)
+            box_torch = torch.as_tensor(box, dtype=torch.float32, device=image.device)
             if len(box_torch.shape) == 2:
                 box_torch = box_torch[:, None, :]  # (B, 1, 4)
 
@@ -175,9 +177,9 @@ class SARSam(nn.Module):
 
 
 def main():
-    os.makedirs(model_save_path, exist_ok=True)
+    os.makedirs(model_save_dir, exist_ok=True)
     shutil.copyfile(
-        __file__, join(model_save_path, run_id + "_" + os.path.basename(__file__))
+        __file__, join(model_save_dir, run_id + "_" + os.path.basename(__file__))
     )
 
     sam_model = sam_model_registry[MODEL_TYPE](checkpoint=CHECKPOINT)
@@ -216,7 +218,7 @@ def main():
     iter_num = 0
     losses = []
     best_loss = 1e10
-    train_dataset = (DATA_DIR)
+    train_dataset = SARDataset(DATA_DIR)
 
     print("Number of training samples: ", len(train_dataset))
     train_dataloader = DataLoader(
@@ -240,10 +242,8 @@ def main():
 
     for epoch in range(start_epoch, num_epochs):
         epoch_loss = 0
-        for step, (image, gt2D, boxes, _, extra) in enumerate(tqdm(train_dataloader)):
+        for step, (image, gt2D, boxes, names_temp) in enumerate(tqdm(train_dataloader)):
             print(image.shape, gt2D.shape, boxes.shape)
-            print(extra )
-            print(batch)
             optimizer.zero_grad()
             boxes_np = boxes.detach().cpu().numpy()
             image, gt2D = image.to(DEVICE), gt2D.to(DEVICE)
@@ -283,7 +283,7 @@ def main():
             "optimizer": optimizer.state_dict(),
             "epoch": epoch,
         }
-        torch.save(checkpoint, join(model_save_path, "sarsam_model_latest.pth"))
+        torch.save(checkpoint, join(model_save_dir, "sarsam_model_latest.pth"))
         ## save the best model
         if epoch_loss < best_loss:
             best_loss = epoch_loss
@@ -292,19 +292,15 @@ def main():
                 "optimizer": optimizer.state_dict(),
                 "epoch": epoch,
             }
-            torch.save(checkpoint, join(model_save_path, "sarsam_model_best.pth"))
+            torch.save(checkpoint, join(model_save_dir, "sarsam_model_best.pth"))
 
         # %% plot loss
         plt.plot(losses)
         plt.title("Dice + Cross Entropy Loss")
         plt.xlabel("Epoch")
         plt.ylabel("Loss")
-        plt.savefig(join(model_save_path, TASK_NAME + "train_loss.png"))
+        plt.savefig(join(model_save_dir, TASK_NAME + "train_loss.png"))
         plt.close()
-
-    for step, batch in enumerate(tqdm(train_dataloader)):
-        print(batch)
-        break  # Just to print the first batch and stop
 
 
 if __name__ == "__main__":
