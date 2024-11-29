@@ -69,6 +69,10 @@ def show_box(box, ax):
 
 ### Custom Dataset Class ###
 class SARDataset(Dataset):
+
+    '''
+    Custom Dataset class for the Sentinel-1 dataset.
+    '''
     def __init__(self, data_root, bbox_shift = 20):
         self.data_root = data_root
         self.mask_path = join(data_root, "masks")
@@ -86,6 +90,7 @@ class SARDataset(Dataset):
         img_1024 = transform.resize(
             plt.imread(self.imag_path_files[idx]), (1024, 1024)
         )
+        # Convert the shape to (C, H, W)
         img_np = img_1024.transpose(2, 0, 1)
         assert(np.max(img_np) <= 1.0 and np.min(img_np) >= 0.0), f"Image {img_name} has values outside [0, 1]"
         mask_1024 = transform.resize(
@@ -97,7 +102,8 @@ class SARDataset(Dataset):
         ## The box is just the bounding box of the mask
         box = torch.tensor(np.array([0, 0, 1024, 1024]))
 
-        return (torch.tensor(img_np, dtype=torch.float32), torch.tensor(mask_np, dtype=torch.float32), box, img_name)
+        return (torch.tensor(img_np, dtype=torch.float32), 
+                torch.tensor(mask_np, dtype=torch.float32), box, img_name)
 
 train_dataset = SARDataset(DATA_DIR)
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -134,62 +140,57 @@ os.makedirs(model_save_dir, exist_ok=True)
 model_save_path = join(model_save_dir, "model.pth")
 
 class SARSam(nn.Module):
-    def __init__(self,
-                 image_encoder,
-                 mask_decoder,
-                 prompt_encoder):
+    def __init__(self, image_encoder, mask_decoder, prompt_encoder):
         super().__init__()
         self.image_encoder = image_encoder
         self.mask_decoder = mask_decoder
         self.prompt_encoder = prompt_encoder
-
-        # Freeze the prompt encoder
+        
+        # Freeze prompt encoder
         for param in self.prompt_encoder.parameters():
             param.requires_grad = False
 
-
     def forward(self, image, box):
-        # Add debug prints
+        # Get image embeddings and print shape
         image_embedding = self.image_encoder(image) 
-        print("image_embedding:", image_embedding.shape)
-        
+        print(f"image_embedding: {image_embedding.shape}")
+
         with torch.no_grad():
-            box_torch = torch.as_tensor(box, dtype=torch.float32, device=image.device)
+            # Convert box to torch tensor and proper device
+            box_torch = torch.as_tensor(box, dtype=torch.float32).to(image.device)
+        
+            # Get prompt embeddings
             sparse_embeddings, dense_embeddings = self.prompt_encoder(
                 points=None,
                 boxes=box_torch,
                 masks=None,
             )
-            print("Before repeat - dense:", dense_embeddings.shape)
-            print("Before repeat - sparse:", sparse_embeddings.shape)
-        
-        # Add shape checks
-        if dense_embeddings.size(0) != image_embedding.size(0):
-            print(f"Mismatch: dense={dense_embeddings.size(0)} vs image={image_embedding.size(0)}")
-            dense_embeddings = dense_embeddings.repeat(image_embedding.size(0), 1, 1, 1)
-            sparse_embeddings = sparse_embeddings.repeat(image_embedding.size(0), 1, 1)
+            print(f"Before repeat - dense: {dense_embeddings.shape}")
+            print(f"Before repeat - sparse: {sparse_embeddings.shape}")
 
-        # Move the batch size check before the mask decoder call
-        if dense_embeddings.size(0) != image_embedding.size(0):
-            dense_embeddings = dense_embeddings.repeat(image_embedding.size(0), 1, 1, 1)
-            sparse_embeddings = sparse_embeddings.repeat(image_embedding.size(0), 1, 1)
+            # Match PE batch size
+            image_pe = self.prompt_encoder.get_dense_pe()
+            image_pe = image_pe.repeat(image.size(0), 1, 1, 1)
 
+        # Predict masks - ensure all inputs match batch dimension
         low_res_masks, _ = self.mask_decoder(
-            image_embeddings=image_embedding,  # (B, 256, 64, 64)
-            image_pe=self.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
-            sparse_prompt_embeddings=sparse_embeddings,  # (B, 2, 256)
-            dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
+            image_embeddings=image_embedding,
+            image_pe=image_pe,
+            sparse_prompt_embeddings=sparse_embeddings,
+            dense_prompt_embeddings=dense_embeddings,
             multimask_output=False,
         )
 
-        ori_res_masks = F.interpolate(
+        # Upscale masks
+        masks = F.interpolate(
             low_res_masks,
             size=(image.shape[2], image.shape[3]),
             mode="bilinear",
             align_corners=False,
         )
-        return ori_res_masks
-
+    
+        return masks
+    
 
 def main():
     os.makedirs(model_save_dir, exist_ok=True)
