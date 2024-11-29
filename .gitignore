@@ -2,3 +2,4 @@ venv/
 models/
 .DS_Store
 .env.local
+segment-anything-2/

@@ -28,22 +28,21 @@ from tqdm import tqdm
 # parser = argparse.ArgumentParser()
 
 
+
 ### Constants ###
 SEED = 42
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-6
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATA_DIR = "../data/sentinel-1-flipped-one-class/train"
-IMAGES_DIR = join(DATA_DIR, "images")
-MASKS_DIR = join(DATA_DIR, "masks")
+DATA_DIR = "data/sentinel-1-flipped-one-class/train"
 TEST_SIZE = 0.2
 MODEL_NAME = "sam-tiny"
-CHECKPOINT = "../checkpoints/sam_vit_b_01ec64.pth"
+CHECKPOINT = "checkpoints/sam_vit_b_01ec64.pth"
 MODEL_TYPE = "vit_b"
 EPOCHS = 20
 NUM_WORKERS = 4
-RESUME = "../checkpoints/resume"
+RESUME = "checkpoints/resume"
 TASK_NAME = "sam-finetune"
 
 ## TODO: Replace this with Argparse later
@@ -106,7 +105,7 @@ for step, (image, gt, bboxes, names_temp) in enumerate(train_loader):
     print(image.shape, gt.shape, bboxes.shape)
     # show the example
     _, axs = plt.subplots(1, 2, figsize=(25, 25))
-    idx = random.randint(0, 7)
+    idx = random.randint(0, BATCH_SIZE - 1)
     axs[0].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
     show_mask(gt[idx].cpu().numpy(), axs[0])
     show_box(bboxes[idx].numpy(), axs[0])
@@ -248,7 +247,7 @@ def main():
             boxes_np = boxes.detach().cpu().numpy()
             image, gt2D = image.to(DEVICE), gt2D.to(DEVICE)
             if args.use_amp:
-                ## TODO: Add AMP
+                ## TODO: Add AMP support, what is AMP?
                 ## AMP
                 with torch.autocast(DEVICE_type="cuda", dtype=torch.float16):
                     sarsam_pred = sarsam_model(image, boxes_np)
