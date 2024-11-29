@@ -94,8 +94,10 @@ class SARDataset(Dataset):
         mask_np = mask_1024[None, :, :]
         assert(np.max(mask_np) <= 1.0 and np.min(mask_np) >= 0.0), f"Mask {img_name} has values outside [0, 1]"
 
-        return (torch.tensor(img_np, dtype=torch.float32), torch.tensor(mask_np, dtype=torch.float32),
-            torch.tensor([0, 0, 1024, 1024], dtype=torch.float32), img_name)
+        ## The box is just the bounding box of the mask
+        box = torch.tensor(np.array([0, 0, 1024, 1024]))
+
+        return (torch.tensor(img_np, dtype=torch.float32), torch.tensor(mask_np, dtype=torch.float32), box, img_name)
 
 train_dataset = SARDataset(DATA_DIR)
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
@@ -112,7 +114,7 @@ for step, (image, gt, bboxes, names_temp) in enumerate(train_loader):
     axs[0].axis("off")
     # set title
     axs[0].set_title(names_temp[idx])
-    idx = random.randint(0, 7)
+    idx = random.randint(0, BATCH_SIZE - 1)
     axs[1].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
     show_mask(gt[idx].cpu().numpy(), axs[1])
     show_box(bboxes[idx].numpy(), axs[1])
@@ -147,18 +149,31 @@ class SARSam(nn.Module):
 
 
     def forward(self, image, box):
-        image_embedding = self.image_encoder(image)  # (B, 256, 64, 64)
-        # do not compute gradients for prompt encoder
+        # Add debug prints
+        image_embedding = self.image_encoder(image) 
+        print("image_embedding:", image_embedding.shape)
+        
         with torch.no_grad():
             box_torch = torch.as_tensor(box, dtype=torch.float32, device=image.device)
-            if len(box_torch.shape) == 2:
-                box_torch = box_torch[:, None, :]  # (B, 1, 4)
-
             sparse_embeddings, dense_embeddings = self.prompt_encoder(
                 points=None,
                 boxes=box_torch,
                 masks=None,
             )
+            print("Before repeat - dense:", dense_embeddings.shape)
+            print("Before repeat - sparse:", sparse_embeddings.shape)
+        
+        # Add shape checks
+        if dense_embeddings.size(0) != image_embedding.size(0):
+            print(f"Mismatch: dense={dense_embeddings.size(0)} vs image={image_embedding.size(0)}")
+            dense_embeddings = dense_embeddings.repeat(image_embedding.size(0), 1, 1, 1)
+            sparse_embeddings = sparse_embeddings.repeat(image_embedding.size(0), 1, 1)
+
+        # Move the batch size check before the mask decoder call
+        if dense_embeddings.size(0) != image_embedding.size(0):
+            dense_embeddings = dense_embeddings.repeat(image_embedding.size(0), 1, 1, 1)
+            sparse_embeddings = sparse_embeddings.repeat(image_embedding.size(0), 1, 1)
+
         low_res_masks, _ = self.mask_decoder(
             image_embeddings=image_embedding,  # (B, 256, 64, 64)
             image_pe=self.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
@@ -166,6 +181,7 @@ class SARSam(nn.Module):
             dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
             multimask_output=False,
         )
+
         ori_res_masks = F.interpolate(
             low_res_masks,
             size=(image.shape[2], image.shape[3]),
@@ -242,7 +258,7 @@ def main():
     for epoch in range(start_epoch, num_epochs):
         epoch_loss = 0
         for step, (image, gt2D, boxes, names_temp) in enumerate(tqdm(train_dataloader)):
-            print(image.shape, gt2D.shape, boxes.shape)
+            print(f"image: {image.shape}, gt2D: {gt2D.shape}, boxes: {boxes.shape}")
             optimizer.zero_grad()
             boxes_np = boxes.detach().cpu().numpy()
             image, gt2D = image.to(DEVICE), gt2D.to(DEVICE)
